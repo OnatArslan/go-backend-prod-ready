@@ -1,12 +1,22 @@
 package products
 
-type service struct {
+import "context"
+
+type Repository interface {
+	FindAll(ctx context.Context) error
 }
 
-type Service interface {
+type svc struct {
+	repo Repository
 }
 
-func NewService() *service {
+func NewService(repo Repository) Service {
+	return &svc{
+		repo: repo,
+	}
+}
 
-	return &service{}
+func (svc *svc) ListProducts(context.Context) error {
+
+	return nil
 }

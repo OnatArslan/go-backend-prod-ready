@@ -5,13 +5,25 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/OnatArslan/go-backend-prod-ready/internal/config"
+	"github.com/OnatArslan/go-backend-prod-ready/internal/db"
 	"github.com/OnatArslan/go-backend-prod-ready/internal/products"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
 
+type application struct {
+	cfg config.Config
+	// logger
+	q *db.Queries
+}
+
 // mount
 func (app *application) mount() http.Handler {
+
+	productService := products.NewService(nil)
+	productHandler := products.NewHandler(productService)
+
 	r := chi.NewRouter()
 
 	// Middleware
@@ -26,9 +38,6 @@ func (app *application) mount() http.Handler {
 		w.Write([]byte("hello world"))
 	})
 
-	productService := products.NewService()
-	productHandler := products.NewHandler(productService)
-
 	r.Route("/ecom/v1", func(r chi.Router) {
 		// register product routes
 		r.Mount("/product", productHandler.Routes())
@@ -41,32 +50,17 @@ func (app *application) mount() http.Handler {
 // run
 func (app *application) run(h http.Handler) error {
 	srv := &http.Server{
-		Addr:         app.config.addr,
+		Addr:         app.cfg.HTTP.Addr,
 		Handler:      h,
 		WriteTimeout: time.Second * 30,
 		ReadTimeout:  time.Second * 10,
 		IdleTimeout:  time.Minute,
 	}
 
-	slog.Info("server has started", "addr", app.config.addr)
+	slog.Info("server has started", "addr", app.cfg.HTTP.Addr)
 
 	return srv.ListenAndServe()
 
-}
-
-type application struct {
-	config config
-	// logger
-	// db driver
-}
-
-type config struct {
-	addr string
-	db   dbConfig
-}
-
-type dbConfig struct {
-	dsn string
 }
 
 // 47:32
