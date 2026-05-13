@@ -1,9 +1,13 @@
 package products
 
-import "context"
+import (
+	"context"
+
+	"github.com/OnatArslan/go-backend-prod-ready/internal/db"
+)
 
 type Repository interface {
-	FindAll(ctx context.Context) error
+	FindAll(ctx context.Context) ([]db.Product, error)
 }
 
 type svc struct {

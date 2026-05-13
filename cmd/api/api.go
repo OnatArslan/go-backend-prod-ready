@@ -1,66 +1,103 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
-	"time"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/OnatArslan/go-backend-prod-ready/internal/config"
 	"github.com/OnatArslan/go-backend-prod-ready/internal/db"
+	"github.com/OnatArslan/go-backend-prod-ready/internal/httpx"
 	"github.com/OnatArslan/go-backend-prod-ready/internal/products"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
 
 type application struct {
-	cfg config.Config
-	// logger
-	q *db.Queries
+	cfg    config.Config
+	logger *slog.Logger
+	q      *db.Queries
 }
 
-// mount
-func (app *application) mount() http.Handler {
+func newApplication(cfg config.Config, logger *slog.Logger, q *db.Queries) *application {
+	return &application{
+		cfg:    cfg,
+		logger: logger,
+		q:      q,
+	}
+}
 
-	productService := products.NewService(nil)
+func (app *application) mount() http.Handler {
+	productService := products.NewService(app.q)
 	productHandler := products.NewHandler(productService)
 
 	r := chi.NewRouter()
 
-	// Middleware
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(30 * time.Second))
+	r.Use(middleware.Timeout(app.cfg.HTTP.RequestTimeout))
 
-	// health endpoint
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("hello world"))
+		if err := httpx.Write(w, http.StatusOK, httpx.Envelope{
+			"status":  "ok",
+			"service": app.cfg.App.Name,
+		}); err != nil {
+			app.logger.Error("write health response failed", "err", err)
+		}
 	})
 
 	r.Route("/ecom/v1", func(r chi.Router) {
-		// register product routes
 		r.Mount("/product", productHandler.Routes())
-
 	})
 
 	return r
 }
 
-// run
 func (app *application) run(h http.Handler) error {
 	srv := &http.Server{
 		Addr:         app.cfg.HTTP.Addr,
 		Handler:      h,
-		WriteTimeout: time.Second * 30,
-		ReadTimeout:  time.Second * 10,
-		IdleTimeout:  time.Minute,
+		ReadTimeout:  app.cfg.HTTP.ReadTimeout,
+		WriteTimeout: app.cfg.HTTP.WriteTimeout,
+		IdleTimeout:  app.cfg.HTTP.IdleTimeout,
 	}
 
-	slog.Info("server has started", "addr", app.cfg.HTTP.Addr)
+	errCh := make(chan error, 1)
+	go func() {
+		app.logger.Info("server started", "addr", app.cfg.HTTP.Addr, "env", app.cfg.App.Env)
 
-	return srv.ListenAndServe()
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+			return
+		}
+		errCh <- nil
+	}()
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		app.logger.Info("shutdown signal received")
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), app.cfg.HTTP.ShutdownTimeout)
+		defer cancel()
+
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			_ = srv.Close()
+			return fmt.Errorf("shutdown server: %w", err)
+		}
+
+		app.logger.Info("server stopped")
+		return nil
+	}
 }
-
-// 47:32

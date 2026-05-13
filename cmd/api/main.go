@@ -2,23 +2,21 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log/slog"
-	"net/http"
 	"os"
-	"time"
 
 	"github.com/OnatArslan/go-backend-prod-ready/internal/config"
 	"github.com/OnatArslan/go-backend-prod-ready/internal/db"
+	applogger "github.com/OnatArslan/go-backend-prod-ready/internal/logger"
 	"github.com/OnatArslan/go-backend-prod-ready/internal/postgres"
 	"github.com/joho/godotenv"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{}))
-	slog.SetDefault(logger)
+	loadDotenvForLocal()
 
-	_ = godotenv.Load()
+	bootstrapLogger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(bootstrapLogger)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -26,27 +24,31 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	logger := applogger.New(cfg.Log)
+	slog.SetDefault(logger)
 
-	pool, err := postgres.NewPool(ctx, cfg.DB.DSN)
+	pool, err := postgres.NewPool(context.Background(), cfg.DB)
 	if err != nil {
-		slog.Error("database connection failed", "err", err)
+		logger.Error("database connection failed", "err", err)
 		os.Exit(1)
 	}
 	defer pool.Close()
 
 	q := db.New(pool)
 
-	api := application{
-		cfg: cfg,
-		q:   q,
-	}
+	api := newApplication(cfg, logger, q)
 
 	h := api.mount()
-	if err := api.run(h); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		slog.Error("server failed", "err", err)
+	if err := api.run(h); err != nil {
+		logger.Error("server failed", "err", err)
 		os.Exit(1)
 	}
+}
 
+func loadDotenvForLocal() {
+	if os.Getenv("APP_ENV") == "production" {
+		return
+	}
+
+	_ = godotenv.Load()
 }

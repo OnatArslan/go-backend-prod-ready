@@ -36,10 +36,12 @@ func (h *handler) listProducts(w http.ResponseWriter, r *http.Request) {
 	err := h.svc.ListProducts(r.Context())
 	if err != nil {
 		log.Println(err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		_ = httpx.WriteError(w, http.StatusInternalServerError, "internal_server_error", "internal server error")
 		return
 	}
 	products := []int{1, 2, 3, 4, 5}
 	// return json in an HTTP response
-	httpx.Write(w, http.StatusOK, products)
+	if err := httpx.Write(w, http.StatusOK, products); err != nil {
+		log.Println(err)
+	}
 }
